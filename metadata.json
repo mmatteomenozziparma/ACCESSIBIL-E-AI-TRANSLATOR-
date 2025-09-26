@@ -1,0 +1,7 @@
+{
+  "name": "Accessible AI Translator",
+  "description": "An advanced translation and text transformation application powered by Gemini. It offers normal translation, text simplification (Easy to Read), and conversion to AAC-style symbolic text, with support for text extraction from images.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
