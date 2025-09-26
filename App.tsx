@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { TranslationMode } from './types';
 import type { Language } from './types';
@@ -29,28 +30,38 @@ const ModeSelector: React.FC<{
 const LanguageSelector: React.FC<{
   id: string;
   label: string;
+  'aria-label': string;
   value: string;
   onChange: (value: string) => void;
   languages: Language[];
   disabled?: boolean;
-}> = ({ id, label, value, onChange, languages, disabled }) => (
+  isLoading?: boolean;
+}> = ({ id, label, 'aria-label': ariaLabel, value, onChange, languages, disabled, isLoading }) => (
   <div>
     <label htmlFor={id} className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
       {label}
     </label>
-    <select
-      id={id}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-      className="w-full bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 disabled:opacity-50"
-    >
-      {languages.map((lang) => (
-        <option key={lang.code} value={lang.code}>
-          {lang.name}
-        </option>
-      ))}
-    </select>
+    <div className="relative">
+      <select
+        id={id}
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled || isLoading}
+        className="w-full bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 disabled:opacity-50"
+      >
+        {languages.map((lang) => (
+          <option key={lang.code} value={lang.code}>
+            {lang.name}
+          </option>
+        ))}
+      </select>
+      {isLoading && (
+        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+          <div className="w-4 h-4 border-2 border-gray-400 dark:border-gray-500 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      )}
+    </div>
   </div>
 );
 
@@ -219,19 +230,76 @@ export default function App() {
   const [mode, setMode] = useState<TranslationMode>(TranslationMode.NORMAL);
   const [inputText, setInputText] = useState<string>('');
   const [outputText, setOutputText] = useState<string>('');
-  const [sourceLang, setSourceLang] = useState<string>('en');
+  const DETECT_LANGUAGE_CODE = 'auto';
+  const [sourceLang, setSourceLang] = useState<string>(DETECT_LANGUAGE_CODE);
   const [targetLang, setTargetLang] = useState<string>('it');
   const [easyReadLevel, setEasyReadLevel] = useState<number>(8);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isDetectingLang, setIsDetectingLang] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
+  const debounceTimeoutRef = useRef<number | null>(null);
+
+  const sourceLanguages = useMemo(() => [
+    { code: DETECT_LANGUAGE_CODE, name: 'Detect Language' },
+    ...LANGUAGES,
+  ], []);
 
   const targetLanguages = useMemo(
     () => LANGUAGES.filter((lang) => lang.code !== sourceLang),
     [sourceLang]
   );
     
+  useEffect(() => {
+    // Debounced language detection
+    const detectLanguage = () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      if (sourceLang === DETECT_LANGUAGE_CODE && inputText.trim().length > 10) {
+        setIsDetectingLang(true);
+        debounceTimeoutRef.current = window.setTimeout(async () => {
+          try {
+            const detectedLangCode = await geminiService.detectLanguage(inputText);
+            if (sourceLang === DETECT_LANGUAGE_CODE) { // Check if user hasn't changed away
+              setSourceLang(detectedLangCode);
+              if (targetLang === detectedLangCode) {
+                 const newTarget = LANGUAGES.find(l => l.code !== detectedLangCode && l.code === 'en') || LANGUAGES.find(l => l.code !== detectedLangCode);
+                 if (newTarget) {
+                    setTargetLang(newTarget.code);
+                 }
+              }
+            }
+          } catch (e) {
+            console.error("Language detection failed:", e);
+            if (sourceLang === DETECT_LANGUAGE_CODE) {
+                setSourceLang('en'); // Default to English on failure
+            }
+          } finally {
+            setIsDetectingLang(false);
+          }
+        }, 700);
+      } else {
+        setIsDetectingLang(false);
+      }
+    };
+    detectLanguage();
+
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [inputText, sourceLang, targetLang]);
+  
+  // When input text is cleared, reset to auto-detect mode
+  useEffect(() => {
+    if (!inputText.trim() && sourceLang !== DETECT_LANGUAGE_CODE) {
+        setSourceLang(DETECT_LANGUAGE_CODE);
+    }
+  }, [inputText, sourceLang]);
+
   const handleImageUpload = useCallback(async (file: File) => {
       setIsLoading(true);
       setError(null);
@@ -262,14 +330,14 @@ export default function App() {
 
 
   const handleSwapLanguages = () => {
-    if (mode === TranslationMode.NORMAL) {
+    if (mode === TranslationMode.NORMAL && sourceLang !== DETECT_LANGUAGE_CODE) {
       setSourceLang(targetLang);
       setTargetLang(sourceLang);
     }
   };
 
   const handleGenerate = async () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || sourceLang === DETECT_LANGUAGE_CODE) return;
     setIsLoading(true);
     setError(null);
     setOutputText('');
@@ -357,11 +425,11 @@ export default function App() {
           {/* Input Panel */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
             <div className="grid grid-cols-2 gap-4 mb-4">
-               <LanguageSelector id="source-lang" label="From" value={sourceLang} onChange={setSourceLang} languages={LANGUAGES} />
+               <LanguageSelector id="source-lang" label="From" aria-label="Select source language" value={sourceLang} onChange={setSourceLang} languages={sourceLanguages} isLoading={isDetectingLang} />
                 {mode === TranslationMode.NORMAL ? (
                     <div className="relative">
-                        <LanguageSelector id="target-lang" label="To" value={targetLang} onChange={setTargetLang} languages={targetLanguages} />
-                         <button onClick={handleSwapLanguages} aria-label="Swap languages" className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 p-1.5 bg-gray-200 dark:bg-gray-600 rounded-full hover:bg-gray-300 dark:hover:bg-gray-500 transition">
+                        <LanguageSelector id="target-lang" label="To" aria-label="Select target language" value={targetLang} onChange={setTargetLang} languages={targetLanguages} />
+                         <button onClick={handleSwapLanguages} disabled={sourceLang === DETECT_LANGUAGE_CODE} aria-label="Swap languages" className="absolute -bottom-2.5 left-1/2 -translate-x-1/2 p-1.5 bg-gray-200 dark:bg-gray-600 rounded-full hover:bg-gray-300 dark:hover:bg-gray-500 transition disabled:opacity-50 disabled:cursor-not-allowed">
                             <Icon name="swap" className="w-4 h-4 text-gray-600 dark:text-gray-300"/>
                         </button>
                     </div>
@@ -405,7 +473,7 @@ export default function App() {
             
             <button
               onClick={handleGenerate}
-              disabled={isLoading || !inputText.trim()}
+              disabled={isLoading || !inputText.trim() || sourceLang === DETECT_LANGUAGE_CODE}
               className="mt-6 w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed transition-colors duration-200 flex items-center justify-center"
             >
               {isLoading ? (
@@ -435,6 +503,12 @@ export default function App() {
         </div>
         <footer className="text-center mt-8 text-sm text-gray-500 dark:text-gray-400">
             <p>Powered by Google Gemini. Designed for accessibility.</p>
+            <div className="mt-2">
+                <a href="#" className="hover:underline mx-2">Privacy Policy</a>
+                <span className="mx-1">·</span>
+                <a href="#" className="hover:underline mx-2">Terms of Service</a>
+            </div>
+            <p className="mt-1 text-xs">This application is designed with GDPR and NIS 2 principles in mind.</p>
         </footer>
       </main>
     </div>
